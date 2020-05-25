@@ -20,5 +20,5 @@ struct AudioFrame
     uint8_t payload[4096];
 } __attribute__((packed));
 
-};
+}; // namespace sppvip
 #endif

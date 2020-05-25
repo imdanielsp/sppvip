@@ -1,52 +1,31 @@
 #ifndef AUDIO_STREAM_PLAYER_H
 #define AUDIO_STREAM_PLAYER_H
 
-#include <CoreFoundation/CFURL.h>
-#include <AudioToolbox/AudioQueue.h>
-#include <AudioToolbox/AudioFile.h>
-#include <CoreAudioTypes/CoreAudioTypes.h>
+#include "audio_frame.h"
 
-class OutputAudioQueue
+namespace sppvip {
+
+class stream_player
 {
 public:
-    OutputAudioQueue() = default;
-    virtual ~OutputAudioQueue() = default;
+    stream_player() = default;
+    virtual ~stream_player() = default;
 
-    void deriveOutputBufferSize(uint32_t packetSize, float seconds);
+    virtual void on_audio(AudioFrame&& audio) = 0;
+};
+
+class audio_stream_player : public stream_player
+{
 public:
-    static const int AQ_NUM_OF_BUFFERS = 3;
+    audio_stream_player();
 
-    AudioStreamBasicDescription m_dataFormat;
-    AudioQueueRef m_queue;
-    AudioQueueBufferRef m_buffers[AQ_NUM_OF_BUFFERS];
-    AudioFileID m_audioFile;
-    uint32_t m_bufferByteSize;
-    int64_t m_currentPacket;
-    int32_t m_numPacketsToRead;
-    AudioStreamPacketDescription* m_packetDescs;
+    ~audio_stream_player();
+
+    void compute_output_buffer_size(float seconds);
+
+    void on_audio(AudioFrame&& audio) override;
+
     bool m_isRunning;
 };
-
-// Audio Player: https://developer.apple.com/library/archive/documentation/MusicAudio/Conceptual/AudioQueueProgrammingGuide/AQPlayback/PlayingAudio.html#//apple_ref/doc/uid/TP40005343-CH3-SW1
-
-class AudioStreamPlayer
-    : public OutputAudioQueue
-{
-public:
-    AudioStreamPlayer()
-        : OutputAudioQueue()
-    {}
-
-    virtual ~AudioStreamPlayer() = default;
-
-    static void onOutputBuffer(void* pAudioStreamPlayer,
-                               AudioQueueRef inAQ,
-                               AudioQueueBufferRef inBuffer);
-
-private:
-    void internalOnOutputBuffer(AudioQueueRef inAQ,
-                                AudioQueueBufferRef inBuffer);
-
-};
-
+}
 #endif
