@@ -1,136 +1,110 @@
 #include "service_discoverer.h"
 
+#include "service_common.h"
+
 #include <iostream>
-#include <sys/select.h>
+#include <memory>
 #include <netdb.h>
 #include <sstream>
-#include <memory>
+#include <sys/select.h>
 
 namespace sppvip {
 
-const char *
-errorString(DNSServiceErrorType error) {
-    switch (error) {
-        case kDNSServiceErr_NoError:
-            return "no error";
-        case kDNSServiceErr_Unknown:
-            return "unknown";
-        case kDNSServiceErr_NoSuchName:
-            return "no such name";
-        case kDNSServiceErr_NoMemory:
-            return "no memory";
-        case kDNSServiceErr_BadParam:
-            return "bad param";
-        case kDNSServiceErr_BadReference:
-            return "bad reference";
-        case kDNSServiceErr_BadState:
-            return "bad state";
-        case kDNSServiceErr_BadFlags:
-            return "bad flags";
-        case kDNSServiceErr_Unsupported:
-            return "unsupported";
-        case kDNSServiceErr_NotInitialized:
-            return "not initialized";
-        case kDNSServiceErr_AlreadyRegistered:
-            return "already registered";
-        case kDNSServiceErr_NameConflict:
-            return "name conflict";
-        case kDNSServiceErr_Invalid:
-            return "invalid";
-        case kDNSServiceErr_Firewall:
-            return "firewall";
-        case kDNSServiceErr_Incompatible:
-            return "incompatible";
-        case kDNSServiceErr_BadInterfaceIndex:
-            return "bad interface index";
-        case kDNSServiceErr_Refused:
-            return "refused";
-        case kDNSServiceErr_NoSuchRecord:
-            return "no such record";
-        case kDNSServiceErr_NoAuth:
-            return "no auth";
-        case kDNSServiceErr_NoSuchKey:
-            return "no such key";
-        case kDNSServiceErr_NATTraversal:
-            return "NAT traversal";
-        case kDNSServiceErr_DoubleNAT:
-            return "double NAT";
-        case kDNSServiceErr_BadTime:
-            return "bad time";
-#ifdef kDNSServiceErr_BadSig
-        case kDNSServiceErr_BadSig:
-            return "bad sig";
-#endif
-#ifdef kDNSServiceErr_BadKey
-        case kDNSServiceErr_BadKey:
-            return "bad key";
-#endif
-#ifdef kDNSServiceErr_Transient
-        case kDNSServiceErr_Transient:
-            return "transient";
-#endif
-#ifdef kDNSServiceErr_ServiceNotRunning
-        case kDNSServiceErr_ServiceNotRunning:
-            return "service not running";
-#endif
-#ifdef kDNSServiceErr_NATPortMappingUnsupported
-        case kDNSServiceErr_NATPortMappingUnsupported:
-            return "NAT port mapping unsupported";
-#endif
-#ifdef kDNSServiceErr_NATPortMappingDisabled
-        case kDNSServiceErr_NATPortMappingDisabled:
-            return "NAT port mapping disabled";
-#endif
-#ifdef kDNSServiceErr_NoRouter
-        case kDNSServiceErr_NoRouter:
-            return "no router";
-#endif
-#ifdef kDNSServiceErr_PollingMode
-        case kDNSServiceErr_PollingMode:
-            return "polling mode";
-#endif
-#ifdef kDNSServiceErr_Timeout
-        case kDNSServiceErr_Timeout:
-            return "timeout";
-#endif
-        default:
-            return "unknown error code";
+namespace {
+void
+browse_callback(DNSServiceRef sdRef,
+                DNSServiceFlags flags,
+                uint32_t interfaceIndex,
+                DNSServiceErrorType errorCode,
+                const char* serviceName,
+                const char* regtype,
+                const char* replyDomain,
+                void* context)
+{
+    assert(context);
+
+    if (errorCode == kDNSServiceErr_NoError) {
+        static_cast<service_discoverer*>(context)->onBrowse(
+            std::string(serviceName),
+            std::string(regtype),
+            std::string(replyDomain));
     }
 }
 
-ServiceDiscoverer::ServiceDiscoverer(DiscoveredNodeList& discoveredList)
+void
+resolveCallback(DNSServiceRef sdRef,
+                DNSServiceFlags flags,
+                uint32_t interfaceIndex,
+                DNSServiceErrorType errorCode,
+                const char* fullname,
+                const char* hosttarget,
+                uint16_t port,
+                uint16_t txtLen,
+                const unsigned char* txtRecord,
+                void* context)
+{
+    assert(context);
+
+    if (errorCode == kDNSServiceErr_NoError) {
+        static_cast<service_discoverer*>(context)->onResolve(
+            std::string(fullname),
+            std::string(hosttarget),
+            ntohs(port),
+            std::string(txtRecord, txtRecord + txtLen));
+    }
+}
+}
+
+service_discoverer::service_discoverer(
+    discovered_node_list<sppvip_node>& discoveredList)
     : m_discoveredList(discoveredList)
     , m_browseSrv()
     , m_browseMutex()
     , m_browseThread(nullptr)
     , m_browseRunning(false)
-{}
-
-ServiceDiscoverer::~ServiceDiscoverer()
+    , m_host_name()
 {
-    assert(m_browseThread->joinable());
+    char host_name[256];
+    gethostname(host_name, sizeof(host_name));
+    m_host_name = host_name;
+}
 
-    m_browseMutex.lock();
-    m_browseRunning = false;
-    m_browseMutex.unlock();
+service_discoverer::~service_discoverer()
+{
+    if (m_browseThread && m_browseThread->joinable()) {
 
-    m_browseThread->join();
+        if (m_browseRunning) {
+            std::scoped_lock<decltype(m_browseMutex)> lock(m_browseMutex);
+            m_browseRunning = false;
+        }
+
+        m_browseThread->join();
+    }
 
     DNSServiceRefDeallocate(m_browseSrv);
 }
 
-void ServiceDiscoverer::start()
+void
+service_discoverer::start()
 {
     if (!m_browseRunning) {
-        m_browseThread = std::make_unique<std::thread>([this]() constexpr {
-            (*this)();
-        });
+        m_browseThread = std::make_unique<std::thread>([this]() { (*this)(); });
     }
 }
 
-void ServiceDiscoverer::onBrowse(const std::string& serviceName,
-                                 const std::string& regType,
-                                 const std::string& replayDomain)
+void
+service_discoverer::stop()
+{
+    if (m_browseRunning) {
+        std::scoped_lock<decltype(m_browseMutex)> lock(m_browseMutex);
+        m_browseRunning = false;
+    }
+}
+
+void
+service_discoverer::onBrowse(const std::string& serviceName,
+                             const std::string& regType,
+                             const std::string& replayDomain)
 {
     DNSServiceRef resolveSrv;
     auto err = DNSServiceResolve(&resolveSrv,
@@ -143,64 +117,20 @@ void ServiceDiscoverer::onBrowse(const std::string& serviceName,
                                  this);
 
     if (err) {
-        std::cerr << "Failed resolving: "
-            << serviceName
-            << " Error:"
-            <<errorString(err) << std::endl;
-    }
-    else {
+        std::cerr << "Failed resolving: " << serviceName
+                  << " Error:" << mdns_error_string(err) << std::endl;
+    } else {
         DNSServiceProcessResult(resolveSrv);
         DNSServiceRefDeallocate(resolveSrv);
     }
 }
 
-void ServiceDiscoverer::browseCallback(DNSServiceRef sdRef, 
-                                       DNSServiceFlags flags, 
-                                       uint32_t interfaceIndex, 
-                                       DNSServiceErrorType errorCode, 
-                                       const char *serviceName, 
-                                       const char *regtype, 
-                                       const char *replyDomain, 
-                                       void *context)
-{
-    assert(context);
-
-    if (errorCode == kDNSServiceErr_NoError) {
-        static_cast<ServiceDiscoverer*>(context)->onBrowse(
-            std::string(serviceName),
-            std::string(regtype),
-            std::string(replyDomain));
-    }
-}
-
-void ServiceDiscoverer::resolveCallback(DNSServiceRef sdRef,
-                                        DNSServiceFlags flags,
-                                        uint32_t interfaceIndex,
-                                        DNSServiceErrorType errorCode,
-                                        const char* fullname,
-                                        const char* hosttarget,
-                                        uint16_t port,
-                                        uint16_t txtLen,
-                                        const unsigned char* txtRecord,
-                                        void* context)
-{
-    assert(context);
-
-    if (errorCode == kDNSServiceErr_NoError) {
-        static_cast<ServiceDiscoverer*>(context)->onResolve(
-            std::string(fullname),
-            std::string(hosttarget),
-            ntohs(port),
-            std::string(txtRecord, txtRecord + txtLen)
-        );
-    }
-}
-
 /// @brief instance mDNS resolve callback
-void ServiceDiscoverer::onResolve(const std::string& fullName,
-                                  const std::string& host,
-                                  uint16_t port,
-                                  const std::string& txtRecord)
+void
+service_discoverer::onResolve(const std::string& fullName,
+                              const std::string& host,
+                              uint16_t port,
+                              const std::string& txtRecord)
 {
     addrinfo* addrs = nullptr;
     addrinfo hints;
@@ -215,30 +145,31 @@ void ServiceDiscoverer::onResolve(const std::string& fullName,
 
     if (rv == -1) {
         std::cerr << "Failed to resolve " << host << std::endl;
-    }
-    else {
-        struct Node serviceNode;
-        serviceNode.m_id = fullName;
-        serviceNode.m_ioStream = std::make_shared<UdpIOStream>(addrs->ai_addr);
+    } else {
+        if (addrs) {
+            sppvip_node serviceNode;
+            serviceNode.m_id = fullName;
+            serviceNode.m_ioStream =
+                std::make_shared<sppvip_node::stream_type>(addrs->ai_addr);
 
-        m_discoveredList.append(std::move(serviceNode));
+            m_discoveredList.append(std::move(serviceNode));
+        } else {
+            std::cerr << "getaddrinfo failed on " << host << std::endl;
+        }
     }
 }
 
-void ServiceDiscoverer::operator()()
+void
+service_discoverer::operator()()
 {
     m_browseRunning = true;
 
-    auto err = DNSServiceBrowse(&m_browseSrv,
-                                0, 
-                                0,
-                                "_sspvip._udp", 
-                                NULL,
-                                browseCallback,
-                                this);
+    auto err = DNSServiceBrowse(
+        &m_browseSrv, 0, 0, SPPVIP_SERVICE_NAME, NULL, browse_callback, this);
 
     if (err) {
-        std::cerr << "Service Browse Error: " << errorString(err) << std::endl;
+        std::cerr << "Service Browse Error: " << mdns_error_string(err)
+                  << std::endl;
         exit(9);
     }
 
@@ -279,7 +210,5 @@ void ServiceDiscoverer::operator()()
             break;
         }
     }
-
-    std::cout << "Done browse thread" << std::endl;
 }
 };
