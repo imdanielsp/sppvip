@@ -3,37 +3,37 @@
 
 #include "audio_frame.h"
 
-#include <string>
-#include <vector>
 #include <arpa/inet.h>
+#include <string>
 #include <sys/socket.h>
+#include <vector>
 
 namespace sppvip {
 
-class IOStreamIntf
+class io_stream
 {
 public:
-    IOStreamIntf() = default;
+    io_stream() = default;
 
-    virtual ~IOStreamIntf() = default;
+    virtual ~io_stream() = default;
 
     virtual std::string read() = 0;
 
     virtual bool write(AudioFrame&& frame) = 0;
 };
 
-class UdpIOStream : public IOStreamIntf
+class udp_stream : public io_stream
 {
-    using UDPSocket = int;
-    using SockAddr = sockaddr;
-    using SockAddrIn = sockaddr_in;
+    using udp_socket = int;
+    using sock_addr = sockaddr;
+    using sock_addr_in = sockaddr_in;
 
 public:
-    UdpIOStream(std::string&& ip, int port);
+    udp_stream(std::string&& ip, int port);
 
-    UdpIOStream(SockAddr* outSckAddr);
+    udp_stream(sock_addr* outSckAddr);
 
-    virtual ~UdpIOStream() = default;
+    virtual ~udp_stream() = default;
 
     std::string read() override;
 
@@ -43,11 +43,11 @@ private:
     void initInSocket();
 
 private:
-    UDPSocket m_outSocket;
-    SockAddrIn m_outAddr;
+    udp_socket m_outSocket;
+    sock_addr_in m_outAddr;
 
-    static UDPSocket m_inSocket;
-    static SockAddrIn m_inAddr;
+    static udp_socket m_inSocket;
+    static sock_addr_in m_inAddr;
 };
 
 };

@@ -1,15 +1,15 @@
 #include "net_io_stream.h"
 
 #include <assert.h>
-#include <netinet/in.h>
 #include <iostream>
+#include <netinet/in.h>
 
 namespace sppvip {
 
-UdpIOStream::UDPSocket UdpIOStream::m_inSocket = 0;
-UdpIOStream::SockAddrIn UdpIOStream::m_inAddr = SockAddrIn();
+udp_stream::udp_socket udp_stream::m_inSocket = 0;
+udp_stream::sock_addr_in udp_stream::m_inAddr = sock_addr_in();
 
-UdpIOStream::UdpIOStream(std::string&& ip, int port)
+udp_stream::udp_stream(std::string&& ip, int port)
     : m_outSocket(socket(AF_INET, SOCK_DGRAM, 0))
 {
     assert(m_outSocket);
@@ -22,9 +22,9 @@ UdpIOStream::UdpIOStream(std::string&& ip, int port)
     initInSocket();
 }
 
-UdpIOStream::UdpIOStream(SockAddr* outSckAddr)
+udp_stream::udp_stream(sock_addr* outSckAddr)
     : m_outSocket(socket(AF_INET, SOCK_DGRAM, 0))
-    , m_outAddr(*(reinterpret_cast<SockAddrIn*>(outSckAddr)))
+    , m_outAddr(*(reinterpret_cast<sock_addr_in*>(outSckAddr)))
 {
     assert(outSckAddr);
     assert(m_outSocket);
@@ -32,7 +32,8 @@ UdpIOStream::UdpIOStream(SockAddr* outSckAddr)
     initInSocket();
 }
 
-void UdpIOStream::initInSocket()
+void
+udp_stream::initInSocket()
 {
     if (!m_inSocket) {
         return;
@@ -44,12 +45,15 @@ void UdpIOStream::initInSocket()
     m_inAddr.sin_addr.s_addr = INADDR_ANY;
     m_inAddr.sin_port = htons(52999);
 
-    auto rv = bind(m_inSocket, reinterpret_cast<const SockAddr*>(&m_inAddr), sizeof(m_inAddr));
+    auto rv = bind(m_inSocket,
+                   reinterpret_cast<const sock_addr*>(&m_inAddr),
+                   sizeof(m_inAddr));
 
     assert(rv >= 0);
 }
 
-std::string UdpIOStream::read()
+std::string
+udp_stream::read()
 {
     socklen_t addrLen = sizeof(m_inSocket);
 
@@ -62,20 +66,21 @@ std::string UdpIOStream::read()
                           0,
                           reinterpret_cast<struct sockaddr*>(&m_inSocket),
                           &addrLen);
-    
+
     return std::string(buff);
 }
 
-bool UdpIOStream::write(AudioFrame&& frame)
+bool
+udp_stream::write(AudioFrame&& frame)
 {
     auto rv = sendto(m_outSocket,
                      &frame,
                      sizeof(frame),
                      0,
-                     reinterpret_cast<struct sockaddr *>(&m_outAddr),
+                     reinterpret_cast<struct sockaddr*>(&m_outAddr),
                      sizeof(m_outAddr));
 
     return rv > 0;
 }
 
-}
+} // namespace sppvip
